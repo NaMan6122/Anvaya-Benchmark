@@ -19,7 +19,7 @@ Executed on an Apple M5 Pro MacBook Pro (24 GB), macOS, all harnesses pointed
 at the same operator gateways (`siemens:qwen-3.8-27b`,
 `opencode:deepseek-v4.1-flash`, `opencode:glm-5.3-flash`).
 
-| Harness | Median | Floor (`noop`) | Median wall | Verified |
+| Harness | Median | Floor (`noop`) | Median wall | Verified (matrix) |
 |---|---|---|---|---|
 | `anv` (benchmark default `--no-mind`) | **25 MB** | **21 MB** | **15.4 s** | **37/37** |
 | `jcode` | 45 MB | 43 MB | 25.1 s | 32/32 |
@@ -28,10 +28,11 @@ at the same operator gateways (`siemens:qwen-3.8-27b`,
 | `claude` | 431 MB | 390 MB | 62.9 s | 24/25 |
 | `opencode` | 582 MB | 537 MB | 20.9 s | 35/35 |
 
-**Totals:** 176 runs, **168 verified, 0 timeouts, 0 idle-kills**. The 8 misses
-are 7 `aider` cells (it has no filesystem-search tool) and 1
-`claude × qwen pressure_read` context abort — both documented in
-[`FINDINGS.md`](FINDINGS.md) §6.
+**Totals:** 238 runs — the 176-run matrix plus an n=3 replication of the two
+heaviest classes — **228 verified, 0 timeouts, 0 idle-kills**. The ten misses
+are 8 `aider` cells (missing filesystem search plus one clarification
+deferral) and 2 intermittent `claude × qwen pressure_read` aborts; the n=3
+replication closed every heavy-cell outlier ([`FINDINGS.md`](FINDINGS.md) §6).
 
 **What we do not claim:** "the world's lightest agentic harness". That needs a
 shippable `--no-mind` default, a default-configuration comparison, more
