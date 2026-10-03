@@ -36,8 +36,14 @@ TASK_ORDER = ["noop", "wide_read", "large_read", "pressure_read", "deep_read",
               "long_session"]
 # Processes that are auxiliary services rather than the harness itself.
 AUX_NAMES = {"mind-daemon", "anvd", "anv-repomap", "__repomap-build", "repomap"}
-HARNESS_MAIN = {"anv": "anv", "jcode": "jcode", "codex": "codex",
-                "opencode": "opencode", "claude": "claude", "aider": "aider"}
+# Process labels that identify the harness's *own* process. A set, not a single
+# string, because a script harness runs under its interpreter: pi and kimi are
+# `node`, hermes is `python`, and the interpreter name is what appears.
+HARNESS_MAIN = {"anv": {"anv"}, "jcode": {"jcode"}, "codex": {"codex"},
+                "opencode": {"opencode"}, "claude": {"claude"}, "aider": {"aider"},
+                "pi": {"pi", "node"}, "goose": {"goose"},
+                "hermes": {"hermes", "python", "python3", "python3.14"},
+                "kimi": {"kimi", "kimi-code"}}
 
 
 def load(arm=None, source_prefix=None):
@@ -109,7 +115,7 @@ def is_main_name(harness, proc):
     if not target:
         return False
     parts = proc.strip().strip("()").split(":")
-    return target in parts
+    return bool(target & set(parts))
 
 
 def aux_share(rec):

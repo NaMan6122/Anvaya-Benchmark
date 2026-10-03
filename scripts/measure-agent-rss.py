@@ -80,12 +80,22 @@ HARNESS_BINS = {
     "claude": "claude",
     "aider": "aider",
     "copilot": "copilot",
+    "pi": "pi",
+    "goose": os.path.expanduser("~/.local/bin/goose"),
+    "hermes": os.path.expanduser("~/.local/bin/hermes"),
+    "kimi": "kimi",
 }
+
+# Local proxy in front of the vendor models. anv names it `CoCode` in its own
+# config; every other harness is configured for it once, outside this script
+# (see COCODE_SETUP in BENCHMARK_CONTENDERS.md).
+COCODE_ORIGIN = "http://localhost:4141"
+ANV_PROVIDER_NAME = {"cocode": "CoCode"}
 
 # Which provider/model pairs each harness can actually reach, and why not.
 # Verified live on 2026-09-15 for the v2 four; claude/aider verified 2026-09-16.
 SUPPORT = {
-    "anv": {"siemens", "opencode"},
+    "anv": {"siemens", "opencode", "cocode"},
     "opencode": {"siemens", "opencode"},
     "jcode": {"siemens", "opencode"},
     # codex >= 0.154 dropped wire_api="chat" and needs the Responses API. Siemens
@@ -98,8 +108,11 @@ SUPPORT = {
     # aider speaks the OpenAI wire via litellm. opencode additionally routes on
     # x-opencode-session, which litellm cannot set; aider reaches it through the
     # local header-injecting pass-through this script starts (OpencodeProxy).
-    "aider": {"siemens", "opencode"},
+    "aider": {"siemens", "opencode", "cocode"},
     "copilot": set(),  # vendor models only; no base-url override
+    # cocode (localhost:4141) serves OpenAI chat and Anthropic messages, no auth.
+    "pi": {"cocode", "opencode"}, "goose": {"cocode", "opencode"},
+    "hermes": {"cocode", "opencode"}, "kimi": {"cocode", "opencode"},
 }
 
 UNSUPPORTED_REASON = {
@@ -131,6 +144,7 @@ CLAUDE_ANTHROPIC_BASE = {
 
 # OpenAI-compatible base URLs for aider (litellm `openai/` provider).
 AIDER_OPENAI_BASE = {
+    "cocode": COCODE_ORIGIN + "/v1",
     "siemens": "https://api.siemens.com/llm/v1",
     # "opencode" is filled in at run time by OpencodeProxy.start().
 }
@@ -147,6 +161,9 @@ MODEL_CONTEXT = {
     ("siemens", "deepseek-v4-flash"): 1000000,
     ("opencode", "deepseek-v4.1-flash"): 1000000,
     ("opencode", "mimo-v2.5"): 1000000,
+    ("cocode", "claude-sonnet-5.5"): 936000,
+    ("opencode", "mimo-v2.6-flash"): 1000000,
+    ("opencode", "longcat-2.5-preview-free"): 262144,
 }
 
 # jcode reaches OpenAI-compatible endpoints through named profiles, created with
@@ -173,6 +190,10 @@ HARNESS_ENV = {
                "DISABLE_AUTOUPDATER": "1"},
     "aider": {"AIDER_ANALYTICS": "false"},
     "copilot": {},
+    "pi": {"PI_TELEMETRY": "0", "PI_SKIP_VERSION_CHECK": "1", "CI": "1"},
+    "goose": {"GOOSE_DISABLE_KEYRING": "1", "GOOSE_TELEMETRY_OFF": "1"},
+    "hermes": {"HERMES_DISABLE_TELEMETRY": "1"},
+    "kimi": {"KIMI_DISABLE_TELEMETRY": "1", "DISABLE_AUTOUPDATE": "1"},
 }
 
 # jcode's daemon is shared per user, not per workspace: two jcode runs
@@ -245,7 +266,8 @@ class OpencodeProxy:
             def log_message(self, *args):
                 pass
 
-        self.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.httpd = http.server.ThreadingHTTPServer(
+            ("127.0.0.1", int(os.environ.get("OPENCODE_PROXY_PORT", "0"))), Handler)
         self.port = self.httpd.server_address[1]
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
         return f"http://127.0.0.1:{self.port}/v1"
@@ -287,7 +309,7 @@ def build_command(harness, provider, model, prompt, workspace, cfg, turn_idx=0):
     if harness == "anv":
         # --project pins the root explicitly; --yolo removes the approval stall.
         argv = [HARNESS_BINS["anv"], "--no-tui", "--yolo",
-                "-p", provider, "-m", model, "--project", workspace]
+                "-p", ANV_PROVIDER_NAME.get(provider, provider), "-m", model, "--project", workspace]
         if turn_idx > 0:
             argv.append("--continue")
         return argv + [prompt]
@@ -362,6 +384,22 @@ def build_command(harness, provider, model, prompt, workspace, cfg, turn_idx=0):
                 "--model", model,
                 "--no-update",
                 "run", prompt]
+
+    if harness == "pi":
+        return [HARNESS_BINS["pi"], "-p", "--provider", provider,
+                "--model", model, prompt]
+
+    if harness == "goose":
+        return [HARNESS_BINS["goose"], "run", "-t", prompt]
+
+    if harness == "hermes":
+        # -z is one-shot; --yolo removes the approval stall. --ignore-rules keeps
+        # a stray AGENTS.md in the fixture from changing the prompt.
+        return [HARNESS_BINS["hermes"], "--yolo", "-m", model, "-z", prompt]
+
+    if harness == "kimi":
+        # -p is already non-interactive; it rejects --auto ("cannot combine").
+        return [HARNESS_BINS["kimi"], "-m", model, "-p", prompt]
 
     raise SystemExit(f"no command builder for harness {harness!r}")
 
@@ -472,6 +510,10 @@ HARNESS_MAIN_BASENAME = {
     "claude": {"claude"},
     "aider": {"aider"},
     "copilot": {"copilot"},
+    "pi": {"pi", "node"},
+    "goose": {"goose"},
+    "hermes": {"hermes", "python", "python3", "python3.14"},
+    "kimi": {"kimi", "kimi-code"},
 }
 
 
@@ -722,7 +764,52 @@ def harness_env(harness, provider, model, workspace, creds, cfg):
 
     elif harness == "aider":
         key_name = {"siemens": "SIEMENS_API_KEY", "opencode": "OPENCODE_API_KEY"}
-        env["OPENAI_API_KEY"] = creds.get(key_name.get(provider, ""), "")
+        # cocode needs no auth, but litellm refuses an empty key.
+        env["OPENAI_API_KEY"] = (creds.get(key_name.get(provider, ""), "")
+                                 or "cocode-bench")
+
+    elif harness in ("pi", "goose", "hermes", "kimi"):
+        # Isolate each run's state so a session from one task cannot be resumed
+        # or recalled by the next; the provider endpoint itself lives in each
+        # tool's one-time config (cocode is the only provider these run on).
+        home = os.path.join(workspace, f".{harness}-home")
+        os.makedirs(home, exist_ok=True)
+        if harness == "pi":
+            env["PI_CODING_AGENT_DIR"] = home
+            src = os.path.expanduser("~/.pi/agent/models.json")
+            if os.path.exists(src):
+                shutil.copy2(src, os.path.join(home, "models.json"))
+        elif harness == "goose":
+            if provider == "opencode":
+                env.update({"OPENAI_HOST": cfg["aider_openai_base"]["opencode"],
+                            "OPENAI_API_KEY": "via-proxy", "GOOSE_PROVIDER": "openai", "GOOSE_MODEL": model})
+            else:
+                # cocode's OpenAI endpoint drops tool definitions -> Anthropic wire.
+                env.update({"ANTHROPIC_HOST": COCODE_ORIGIN, "ANTHROPIC_API_KEY": "cocode-bench",
+                            "GOOSE_PROVIDER": "anthropic", "GOOSE_MODEL": model})
+        elif harness == "hermes":
+            env.update({"ANTHROPIC_API_KEY": "cocode-bench", "OPENAI_API_KEY": "via-proxy"})
+        elif harness == "kimi":
+            # Kimi's config is per-user, not under KIMI_CODE_HOME. Install a
+            # temporary config in a private HOME for each run.
+            config_home = os.path.join(workspace, f".{harness}-config-home")
+            config_dir = os.path.join(config_home, ".kimi-code")
+            os.makedirs(config_dir, exist_ok=True)
+            config = os.path.join(config_dir, "config.toml")
+            with open(config, "w") as fh:
+                fh.write(
+                    f'default_model = "{model}"\n\n'
+                    '[providers.opencode]\n'
+                    'type = "openai"\n'
+                    f'base_url = "{cfg["aider_openai_base"]["opencode"]}"\n'
+                    'api_key = "via-proxy"\n\n'
+                    f'[models."{model}"]\n'
+                    'provider = "opencode"\n'
+                    f'model = "{model}"\n'
+                    'max_context_size = 1000000\n'
+                )
+            env["HOME"] = config_home
+            env["KIMI_CODE_HOME"] = config_dir
 
     if cfg["extra_env"]:
         env.update(cfg["extra_env"])
@@ -1181,7 +1268,7 @@ def main():
     # Everything from here on can talk to the opencode gateway, and aider
     # cannot set x-opencode-session itself; start the pass-through once.
     proxy = None
-    if any(kind == "run" and h == "aider" and prov == "opencode"
+    if any(kind == "run" and h in ("aider", "pi", "goose", "hermes", "kimi") and prov == "opencode"
            for kind, h, prov, _m, _t, _r in plan):
         proxy = OpencodeProxy(creds.get("OPENCODE_API_KEY", ""))
         cfg["aider_openai_base"]["opencode"] = proxy.start()
