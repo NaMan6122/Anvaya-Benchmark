@@ -95,8 +95,9 @@ and 3 gateway-stall attempts, §4):
    — but goose (Rust) is ~5x anv, and pi (Node) is lighter than both Python
    harnesses. The harness's own engineering moves it as much as the language.
 3. **anv stays the floor** with a 13 MB kernel footprint — no daemon, no
-   helper process, on this gateway and these models. 90/92 verified; the two
-   failures are a gateway stall, not anv (§4).
+   helper process, on this gateway and these models. 90/90 verified; the two
+   idle-killed longcat attempts were rerun and passed (the reruns are the
+   cells; the attempts are in the raw records, §4).
 4. **hermes and kimi carry a resident helper they cannot drop.** On the heavy
    tasks each carries a ~190 MB / ~350 MB second process that the kernel
    footprint column makes visible (hermes fp 173 vs own 201; kimi fp 346 vs
