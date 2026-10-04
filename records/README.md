@@ -10,6 +10,7 @@ by `scripts/agent-rss-report.py`.
 | Files | What | Runs |
 |---|---|---|
 | `v5-copilot-bundle-anchor-serial-2026-10-04.jsonl` | agent-RSS v5 — Copilot CLI BYOK lane (2026-10-04), two models (siemens qwen-3.8-27b, opencode longcat-2.5-preview-free) × 9 tasks × n=3 | 54 |
+| `v6-evot-opencode-2026-10-05.jsonl` | agent-RSS v6 — evot lane (2026-10-05), evot v2026.9.29 (native arm64), three opencode models × 9 tasks × n=3 | 81 |
 | `v6-gopair-anchor-serial-opencode-2026-10-04.jsonl` | agent-RSS v6 — Go-pair lane (2026-10-04), crush 0.97.1 + reasonix v1.39.7 (native Go binary), three opencode models × 9 tasks × n=3 | 162 |
 | `v4-phase1.2-anchor-serial-2026-10-03.jsonl` | agent-RSS v4 phase 1.2 anchor (2026-10-03), six opencode harnesses, long_session + deep-research | 54 |
 | `v4-anchor-serial-2026-10-03.jsonl` | agent-RSS v4 contended main (2026-09-30 → 10-03), six harnesses, 23 tasks, n=3 | 498 |
