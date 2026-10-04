@@ -84,6 +84,13 @@ HARNESS_BINS = {
     "goose": os.path.expanduser("~/.local/bin/goose"),
     "hermes": os.path.expanduser("~/.local/bin/hermes"),
     "kimi": "kimi",
+    "crush": "crush",
+    # The npm `reasonix` on PATH is a node shim around a prebuilt native Go
+    # binary (verified 2026-10-04); pin the binary itself or the measurement
+    # would be of a Node wrapper, not the Go harness this lane exists for.
+    "reasonix": os.path.expanduser(
+        "/opt/homebrew/lib/node_modules/reasonix/node_modules/"
+        "@reasonix/cli-darwin-arm64/bin/reasonix"),
     "agy": os.path.expanduser("~/.local/bin/agy"),
 }
 
@@ -118,6 +125,13 @@ SUPPORT = {
     # cocode (localhost:4141) serves OpenAI chat and Anthropic messages, no auth.
     "pi": {"cocode", "opencode"}, "goose": {"cocode", "opencode"},
     "hermes": {"cocode", "opencode"}, "kimi": {"cocode", "opencode"},
+    # crush v0.97.1 ships a built-in `opencode-go` provider that sets
+    # x-opencode-session itself (verified live 2026-10-04); it needs
+    # OPENCODE_API_KEY in env and no proxy.
+    "crush": {"opencode"},
+    # reasonix (Go) is a plain OpenAI client -> opencode only through the
+    # header-injecting proxy, same lane as goose/kimi.
+    "reasonix": {"opencode"},
     # Antigravity CLI: Google vendor models only (Google sign-in, keyring).
     # No base-URL override -> runs as its own dated vendor lane, like codex's
     # siemens-only row in the 2026-09-16 data.
@@ -201,6 +215,9 @@ HARNESS_ENV = {
     "goose": {"GOOSE_DISABLE_KEYRING": "1", "GOOSE_TELEMETRY_OFF": "1"},
     "hermes": {"HERMES_DISABLE_TELEMETRY": "1"},
     "kimi": {"KIMI_DISABLE_TELEMETRY": "1", "DISABLE_AUTOUPDATE": "1"},
+    # crush telemetry is off via the per-run crushrc (`option metrics false`).
+    "crush": {},
+    "reasonix": {},
 }
 
 # jcode's daemon is shared per user, not per workspace: two jcode runs
@@ -268,7 +285,10 @@ class OpencodeProxy:
                     self.end_headers()
                     self.wfile.write(payload)
                 except Exception:
-                    self.send_error(502)
+                    try:
+                        self.send_error(502)
+                    except Exception:
+                        pass
 
             def log_message(self, *args):
                 pass
@@ -408,6 +428,29 @@ def build_command(harness, provider, model, prompt, workspace, cfg, turn_idx=0):
         # -p is already non-interactive; it rejects --auto ("cannot combine").
         return [HARNESS_BINS["kimi"], "-m", model, "-p", prompt]
 
+    if harness == "crush":
+        # `run` is the one-shot form; --model takes provider/id form. Tool
+        # permissions come from the per-run crushrc written in harness_env;
+        # the -y/--yolo flag is documented in the help but rejected by pflag
+        # in v0.97.1 (stale help), so it must not be used. -v is required for
+        # the runner's idle watchdog: without it, crush emits nothing to a
+        # non-TTY stdout until the turn completes (spinner is TTY-gated), so
+        # any model stream longer than the idle cap gets killed mid-work
+        # (verified 2026-10-04: mimo large_read idle-killed at 245s). -v
+        # streams per-token activity bytes to the pipe continuously.
+        return [HARNESS_BINS["crush"], "run", "-v",
+                "--model", f"opencode-go/{model}", prompt]
+
+    if harness == "reasonix":
+        # run + --permission-mode danger-full-access is the headless
+        # auto-approve (verified live 2026-10-04 against v1.39.7): default
+        # Ask fails closed with no approver, and workspace-write still gates
+        # writers. Model refs resolve as provider/model against the per-run
+        # config.
+        return [HARNESS_BINS["reasonix"], "run",
+                "--model", f"opencode/{model}",
+                "--permission-mode", "danger-full-access", prompt]
+
     if harness == "copilot":
         # -p is one-shot; --allow-all is required non-interactive (auto-approve
         # tools + paths so nothing stalls on a permission prompt). --add-dir
@@ -479,6 +522,8 @@ def harness_version(harness):
         "claude": [HARNESS_BINS["claude"], "--version"],
         "aider": [HARNESS_BINS["aider"], "--version"],
         "copilot": [HARNESS_BINS["copilot"], "--version"],
+        "crush": [HARNESS_BINS["crush"], "--version"],
+        "reasonix": [HARNESS_BINS["reasonix"], "--version"],
         "agy": [HARNESS_BINS["agy"], "--version"],
     }.get(harness, [])
     if not argv:
@@ -843,6 +888,44 @@ def harness_env(harness, provider, model, workspace, creds, cfg):
                 )
             env["HOME"] = config_home
             env["KIMI_CODE_HOME"] = config_dir
+
+    if harness == "crush":
+        # Per-run XDG config + data dirs so the operator's ~/.config/crush
+        # (providers, skills, sessions) cannot bleed into the run. crushrc
+        # auto-approves the corpus' tool set; the built-in opencode-go
+        # provider picks up OPENCODE_API_KEY from env (set via creds).
+        xdg = os.path.join(workspace, ".crush-home")
+        os.makedirs(os.path.join(xdg, "crush"), exist_ok=True)
+        with open(os.path.join(xdg, "crush", "crushrc"), "w") as fh:
+            fh.write(
+                "option metrics false\n"
+                "permissions allow view ls grep glob edit write patch read bash\n"
+            )
+        env["XDG_CONFIG_HOME"] = xdg
+        env["XDG_DATA_HOME"] = os.path.join(workspace, ".crush-data")
+        env["XDG_CACHE_HOME"] = os.path.join(workspace, ".crush-cache")
+
+    if harness == "reasonix":
+        # Per-run REASONIX_HOME (config + sessions). base_url includes /v1:
+        # the OpenAI provider appends /chat/completions to it.
+        base = cfg["aider_openai_base"].get("opencode")
+        if not base:
+            raise SystemExit("reasonix/opencode: proxy not started")
+        home = os.path.join(workspace, ".reasonix-home")
+        os.makedirs(home, exist_ok=True)
+        with open(os.path.join(home, "config.toml"), "w") as fh:
+            fh.write(
+                'default_model = "opencode"\n\n'
+                '[[providers]]\n'
+                'name = "opencode"\n'
+                'kind = "openai"\n'
+                f'base_url = "{base}"\n'
+                f'models = ["{model}"]\n'
+                'api_key_env = "RX_BENCH_KEY"\n'
+                'context_window = 1000000\n'
+            )
+        env["REASONIX_HOME"] = home
+        env["RX_BENCH_KEY"] = "via-proxy"
 
     if harness == "copilot":
         # BYOK provider selection (verified 2026-10-04 against installed 1.0.83):
@@ -1326,7 +1409,7 @@ def main():
     # Everything from here on can talk to the opencode gateway, and aider
     # cannot set x-opencode-session itself; start the pass-through once.
     proxy = None
-    if any(kind == "run" and h in ("aider", "pi", "goose", "hermes", "kimi", "copilot") and prov == "opencode"
+    if any(kind == "run" and h in ("aider", "pi", "goose", "hermes", "kimi", "copilot", "reasonix") and prov == "opencode"
            for kind, h, prov, _m, _t, _r in plan):
         proxy = OpencodeProxy(creds.get("OPENCODE_API_KEY", ""))
         cfg["aider_openai_base"]["opencode"] = proxy.start()
