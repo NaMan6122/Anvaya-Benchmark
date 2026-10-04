@@ -84,6 +84,7 @@ HARNESS_BINS = {
     "goose": os.path.expanduser("~/.local/bin/goose"),
     "hermes": os.path.expanduser("~/.local/bin/hermes"),
     "kimi": "kimi",
+    "agy": os.path.expanduser("~/.local/bin/agy"),
 }
 
 # Local proxy in front of the vendor models. anv names it `CoCode` in its own
@@ -109,16 +110,22 @@ SUPPORT = {
     # x-opencode-session, which litellm cannot set; aider reaches it through the
     # local header-injecting pass-through this script starts (OpencodeProxy).
     "aider": {"siemens", "opencode", "cocode"},
-    "copilot": set(),  # vendor models only; no base-url override
+    # copilot 1.0.83 BYOK (COPILOT_PROVIDER_* env vars, verified in the
+    # installed app.js 2026-10-04): opencode through the header-injecting
+    # proxy (SSE must keep its text/event-stream content-type), siemens
+    # direct. GitHub models stay available but are out of scope.
+    "copilot": {"siemens", "opencode"},
     # cocode (localhost:4141) serves OpenAI chat and Anthropic messages, no auth.
     "pi": {"cocode", "opencode"}, "goose": {"cocode", "opencode"},
     "hermes": {"cocode", "opencode"}, "kimi": {"cocode", "opencode"},
+    # Antigravity CLI: Google vendor models only (Google sign-in, keyring).
+    # No base-URL override -> runs as its own dated vendor lane, like codex's
+    # siemens-only row in the 2026-09-16 data.
+    "agy": {"google"},
 }
 
 UNSUPPORTED_REASON = {
     ("codex", "opencode"): "opencode gateway requires x-opencode-session; codex sends none",
-    ("copilot", "siemens"): "copilot CLI has no base-url override",
-    ("copilot", "opencode"): "copilot CLI has no base-url override",
 }
 
 # Provider-level support is not always model-level: opencode's gateway serves
@@ -401,6 +408,31 @@ def build_command(harness, provider, model, prompt, workspace, cfg, turn_idx=0):
         # -p is already non-interactive; it rejects --auto ("cannot combine").
         return [HARNESS_BINS["kimi"], "-m", model, "-p", prompt]
 
+    if harness == "copilot":
+        # -p is one-shot; --allow-all is required non-interactive (auto-approve
+        # tools + paths so nothing stalls on a permission prompt). --add-dir
+        # scopes file access to the seeded workspace, mirroring opencode --dir.
+        # --output-format json (JSONL) emits the response events so the
+        # noop require_stdout check still sees the harness's text.
+        if turn_idx > 0:
+            raise SystemExit("copilot has no clean headless session resume")
+        return [HARNESS_BINS["copilot"], "-p", prompt,
+                "--allow-all", "--model", model,
+                "--add-dir", workspace,
+                "--output-format", "json"]
+
+    if harness == "agy":
+        # -p is print mode (single prompt, non-interactive);
+        # --dangerously-skip-permissions auto-approves every tool request.
+        # --new-project isolates this workspace from any prior session.
+        if turn_idx > 0:
+            raise SystemExit("agy has no clean headless session resume")
+        return [HARNESS_BINS["agy"], "-p", prompt,
+                "--dangerously-skip-permissions",
+                "--model", model,
+                "--new-project",
+                "--output-format", "json"]
+
     raise SystemExit(f"no command builder for harness {harness!r}")
 
 
@@ -447,6 +479,7 @@ def harness_version(harness):
         "claude": [HARNESS_BINS["claude"], "--version"],
         "aider": [HARNESS_BINS["aider"], "--version"],
         "copilot": [HARNESS_BINS["copilot"], "--version"],
+        "agy": [HARNESS_BINS["agy"], "--version"],
     }.get(harness, [])
     if not argv:
         return "unknown"
@@ -810,6 +843,31 @@ def harness_env(harness, provider, model, workspace, creds, cfg):
                 )
             env["HOME"] = config_home
             env["KIMI_CODE_HOME"] = config_dir
+
+    if harness == "copilot":
+        # BYOK provider selection (verified 2026-10-04 against installed 1.0.83):
+        # COPILOT_PROVIDER_BASE_URL activates BYOK and routes the CLI away from
+        # GitHub's model routing; type "openai" covers both OpenAI-wire lanes.
+        # opencode must use the local header-injecting proxy (the gateway
+        # streams SSE and needs x-opencode-session, which copilot cannot set).
+        if provider == "opencode":
+            base = cfg["aider_openai_base"].get("opencode")
+            if not base:
+                raise SystemExit("copilot/opencode: proxy not started")
+            env["COPILOT_PROVIDER_BASE_URL"] = base
+            env["COPILOT_PROVIDER_API_KEY"] = "via-proxy"
+        elif provider == "siemens":
+            env["COPILOT_PROVIDER_BASE_URL"] = "https://api.siemens.com/llm/v1"
+            env["COPILOT_PROVIDER_API_KEY"] = creds.get("SIEMENS_API_KEY", "")
+        else:
+            raise SystemExit(f"copilot: unsupported provider {provider!r}")
+        env["COPILOT_PROVIDER_TYPE"] = "openai"
+        env["COPILOT_PROGRESS"] = "off"
+        # Per-run config home: no user settings, plugins, MCP config or saved
+        # sessions from the operator's ~/.copilot can bleed into the run.
+        copilot_home = os.path.join(workspace, ".copilot-home")
+        os.makedirs(copilot_home, exist_ok=True)
+        env["COPILOT_HOME"] = copilot_home
 
     if cfg["extra_env"]:
         env.update(cfg["extra_env"])
@@ -1268,7 +1326,7 @@ def main():
     # Everything from here on can talk to the opencode gateway, and aider
     # cannot set x-opencode-session itself; start the pass-through once.
     proxy = None
-    if any(kind == "run" and h in ("aider", "pi", "goose", "hermes", "kimi") and prov == "opencode"
+    if any(kind == "run" and h in ("aider", "pi", "goose", "hermes", "kimi", "copilot") and prov == "opencode"
            for kind, h, prov, _m, _t, _r in plan):
         proxy = OpencodeProxy(creds.get("OPENCODE_API_KEY", ""))
         cfg["aider_openai_base"]["opencode"] = proxy.start()
