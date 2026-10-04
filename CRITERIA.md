@@ -146,15 +146,22 @@ scoring as success.
 **Supported by the data:**
 
 > In this benchmark, on identical models and objective tasks, `anv` in
-> `--no-mind` mode had the lowest memory of the six harnesses measured
-> (21 MB floor / 25 MB median own process), the fastest median completion
-> (15.4 s), and a 37/37 verified completion rate. `jcode` was the lightest
-> zero-configuration harness at 43/45 MB.
+> `--no-mind` mode has the lowest memory of the thirteen harnesses measured
+> (20 MB idle floor / 23.4 MB median own process, v4 phase 1.2 anchor on the
+> opencode gateway, 90/90 verified), ahead of jcode (45.0 MB, the lightest
+> zero-configuration harness), reasonix (65.6 MB), goose (96.5 MB) and the
+> rest of the field. `jcode` remains the lightest zero-configuration
+> harness at 43/45 MB.
 
-**Not supported yet** (and we will not claim it): "the world's lightest agentic
-harness". That claim needs (a) the no-mind default merged and shippable,
-(b) a default-configuration comparison, (c) more harnesses than six, and
-(d) at least one non-macOS platform. These are the v4 acceptance criteria.
+**Claimed since 2026-10-04 (owner decision):** "the world's lightest agentic
+harness, measured" — supported by the cumulative field: 13 harnesses, 949
+runs, 913 verified, macOS/ARM, three opencode-gateway models, n=3 per cell,
+anv --no-mind at 20 MB floor / 23.4 MB median own-process RSS (v4 phase 1.2
++ v5 copilot + v6 Go pair). The claim is always published with that scope
+attached. Remaining gates against the strongest form: (a) the no-mind default
+merged and shippable, (b) a default-configuration comparison, and (d) at
+least one non-macOS platform. Gate (c) — more than six harnesses — is
+satisfied (13). These are the v4 acceptance criteria.
 
 ## 9. Reproduction checklist
 
