@@ -9,6 +9,9 @@ by `scripts/agent-rss-report.py`.
 
 | Files | What | Runs |
 |---|---|---|
+| `v5-copilot-bundle-anchor-serial-2026-10-04.jsonl` | agent-RSS v5 — Copilot CLI BYOK lane (2026-10-04), two models (siemens qwen-3.8-27b, opencode longcat-2.5-preview-free) × 9 tasks × n=3 | 54 |
+| `v4-phase1.2-anchor-serial-2026-10-03.jsonl` | agent-RSS v4 phase 1.2 anchor (2026-10-03), six opencode harnesses, long_session + deep-research | 54 |
+| `v4-anchor-serial-2026-10-03.jsonl` | agent-RSS v4 contended main (2026-09-30 → 10-03), six harnesses, 23 tasks, n=3 | 498 |
 | `v3-*.jsonl` | agent-RSS v3 campaign (2026-09-16) | 176 |
 | `v2-*.jsonl` | agent-RSS v2 campaign (2026-09-15/16), including the 40 records carried forward from v1 for byte-identical harness binaries | 66 |
 | `corpus-v3.sha256` | corpus identity for v3 (`covers fixtures + manifest`) | — |
