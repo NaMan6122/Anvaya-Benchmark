@@ -92,6 +92,10 @@ HARNESS_BINS = {
         "/opt/homebrew/lib/node_modules/reasonix/node_modules/"
         "@reasonix/cli-darwin-arm64/bin/reasonix"),
     "agy": os.path.expanduser("~/.local/bin/agy"),
+    # Native arm64 binary (no node shim); ~/.evotai/bin/evot, v2026.9.29.
+    # One-shot -p auto-approves tools (verified live 2026-10-05: edit task
+    # executed with no approval stall on a non-TTY pipe).
+    "evot": os.path.expanduser("~/.evotai/bin/evot"),
 }
 
 # Local proxy in front of the vendor models. anv names it `CoCode` in its own
@@ -132,6 +136,9 @@ SUPPORT = {
     # reasonix (Go) is a plain OpenAI client -> opencode only through the
     # header-injecting proxy, same lane as goose/kimi.
     "reasonix": {"opencode"},
+    # evot's OpenAI provider is a plain client -> opencode only through the
+    # header-injecting proxy, same lane as reasonix (verified live 2026-10-05).
+    "evot": {"opencode"},
     # Antigravity CLI: Google vendor models only (Google sign-in, keyring).
     # No base-URL override -> runs as its own dated vendor lane, like codex's
     # siemens-only row in the 2026-09-16 data.
@@ -218,6 +225,9 @@ HARNESS_ENV = {
     # crush telemetry is off via the per-run crushrc (`option metrics false`).
     "crush": {},
     "reasonix": {},
+    # EVOT_AUTO_DOWNLOAD=0 so a campaign cannot silently change the binary it
+    # already fingerprinted (evot has an update command / self-update path).
+    "evot": {"EVOT_AUTO_DOWNLOAD": "0"},
 }
 
 # jcode's daemon is shared per user, not per workspace: two jcode runs
@@ -451,6 +461,18 @@ def build_command(harness, provider, model, prompt, workspace, cfg, turn_idx=0):
                 "--model", f"opencode/{model}",
                 "--permission-mode", "danger-full-access", prompt]
 
+    if harness == "evot":
+        # -p is one-shot and auto-approves tools (no --yolo flag exists;
+        # verified live 2026-10-05). --env-file points at the per-run file
+        # harness_env writes so the operator's global ~/.evotai/evot.env
+        # (which may hold a real vendor key) cannot bleed into the run.
+        # --model provider:model form per the docs (colon, not slash).
+        if turn_idx > 0:
+            raise SystemExit("evot has no clean headless session resume")
+        return [HARNESS_BINS["evot"], "-p", prompt,
+                "--env-file", os.path.join(workspace, ".evot-home", "evot.env"),
+                "--model", f"openai:{model}"]
+
     if harness == "copilot":
         # -p is one-shot; --allow-all is required non-interactive (auto-approve
         # tools + paths so nothing stalls on a permission prompt). --add-dir
@@ -524,6 +546,7 @@ def harness_version(harness):
         "copilot": [HARNESS_BINS["copilot"], "--version"],
         "crush": [HARNESS_BINS["crush"], "--version"],
         "reasonix": [HARNESS_BINS["reasonix"], "--version"],
+        "evot": [HARNESS_BINS["evot"], "--version"],
         "agy": [HARNESS_BINS["agy"], "--version"],
     }.get(harness, [])
     if not argv:
@@ -926,6 +949,25 @@ def harness_env(harness, provider, model, workspace, creds, cfg):
             )
         env["REASONIX_HOME"] = home
         env["RX_BENCH_KEY"] = "via-proxy"
+
+    if harness == "evot":
+        # Per-run evot.env under the workspace (the --env-file target). The
+        # base URL is the *bound* proxy port, never a rebuilt env URL: with
+        # port=0 the proxy picks an ephemeral port and a URL built from
+        # $OPENCODE_PROXY_PORT would point at dead port 0 and the model call
+        # hangs silently until idle-kill (kimi hit this 2026-10-04).
+        base = cfg["aider_openai_base"].get("opencode")
+        if not base:
+            raise SystemExit("evot/opencode: proxy not started")
+        home = os.path.join(workspace, ".evot-home")
+        os.makedirs(home, exist_ok=True)
+        with open(os.path.join(home, "evot.env"), "w") as fh:
+            fh.write(
+                "EVOT_LLM_PROVIDER=openai\n"
+                f"EVOT_LLM_OPENAI_BASE_URL={base}\n"
+                "EVOT_LLM_OPENAI_API_KEY=via-proxy\n"
+                f"EVOT_LLM_OPENAI_MODEL={model}\n"
+            )
 
     if harness == "copilot":
         # BYOK provider selection (verified 2026-10-04 against installed 1.0.83):
@@ -1409,7 +1451,7 @@ def main():
     # Everything from here on can talk to the opencode gateway, and aider
     # cannot set x-opencode-session itself; start the pass-through once.
     proxy = None
-    if any(kind == "run" and h in ("aider", "pi", "goose", "hermes", "kimi", "copilot", "reasonix") and prov == "opencode"
+    if any(kind == "run" and h in ("aider", "pi", "goose", "hermes", "kimi", "copilot", "reasonix", "evot") and prov == "opencode"
            for kind, h, prov, _m, _t, _r in plan):
         proxy = OpencodeProxy(creds.get("OPENCODE_API_KEY", ""))
         cfg["aider_openai_base"]["opencode"] = proxy.start()
